@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Wordspace VJ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #020114;
+    --panel: rgba(8, 7, 30, .86);
+    --line: rgba(255, 255, 255, .14);
+    --ink: #eceaff;
+    --soft: #9a9de0;
+    --signal: #ff3da6;
+    --field: rgba(255, 255, 255, .07);
+    --font: "Bricolage Grotesque", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #000006; --panel: rgba(4, 4, 20, .88); }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { overflow: hidden; background: var(--bg); color: var(--ink); font: 400 14px/1.35 var(--font); }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  #panel {
+    position: fixed; z-index: 3; left: 0; top: 0; bottom: 0;
+    width: min(300px, 88vw);
+    padding: calc(14px + env(safe-area-inset-top, 0px)) 14px calc(20px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    transition: transform .25s ease;
+  }
+  .clean #panel { transform: translateX(-102%); }
+  @media (prefers-reduced-motion: reduce) { #panel { transition: none; } }
+
+  #ask { display: flex; gap: 6px; margin: 0 0 8px; }
+  #word { flex: 1; min-width: 0; }
+  #status { min-height: 2.7em; margin: 0 0 10px; color: var(--soft); }
+  .top { display: flex; gap: 6px; margin-bottom: 4px; }
+  .top button { flex: 1; }
+
+  h2 { margin: 18px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 14px; font-weight: 700; }
+  .row { display: grid; grid-template-columns: 112px 1fr; align-items: center; gap: 8px; margin: 7px 0; color: var(--soft); }
+  .row.check { grid-template-columns: 1fr auto; }
+
+  input, select, button { font: inherit; color: var(--ink); }
+  input[type=text], select {
+    width: 100%; padding: 6px 8px;
+    background: var(--field); border: 1px solid var(--line); border-radius: 6px;
+  }
+  select option { background: #0b0a26; color: var(--ink); }
+  input[type=range] { width: 100%; accent-color: var(--signal); }
+  input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--signal); }
+  input[type=color] { width: 100%; height: 28px; padding: 0; background: none; border: 1px solid var(--line); border-radius: 6px; }
+  input[type=file] { width: 100%; font-size: 12px; color: var(--soft); }
+  button {
+    padding: 6px 12px; cursor: pointer;
+    background: var(--field); border: 1px solid var(--line); border-radius: 6px;
+  }
+  button:hover { background: var(--ink); color: #05041a; }
+  :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+  #meter { height: 6px; border-radius: 3px; background: var(--field); overflow: hidden; }
+  #meter i { display: block; height: 100%; width: 0; background: var(--signal); }
+  #keys { margin: 18px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--soft); font-size: 12.5px; }
+
+  #open { position: fixed; z-index: 2; left: 12px; top: calc(12px + env(safe-area-inset-top, 0px)); display: none; background: var(--panel); }
+  .clean #open { display: block; }
+  .clean.idle #open { opacity: 0; pointer-events: none; }
+  .clean.idle { cursor: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="open" type="button">Settings</button>
+
+<aside id="panel" aria-label="Settings">
+  <form id="ask" autocomplete="off">
+    <input id="word" type="text" placeholder="type a word or a sentence" aria-label="Words to search images for"
+           enterkeyhint="go" spellcheck="false" autocapitalize="off" maxlength="120">
+    <button type="submit">Search</button>
+  </form>
+  <p id="status" role="status" aria-live="polite">Type a word or a sentence and press Enter.</p>
+  <div class="top">
+    <button id="pause" type="button">Pause</button>
+    <button id="full" type="button">Fullscreen</button>
+    <button id="hide" type="button">Hide panel</button>
+  </div>
+  <div id="controls"></div>
+  <p id="keys">Keys, when you’re not typing: 1–9 and 0 pick an animation, Space pauses, F is fullscreen, H hides this panel.</p>
+</aside>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var canvas = $('c'), ctx = canvas.getContext('2d');
+  var buf = document.createElement('canvas'), bctx = buf.getContext('2d');
+  var form = $('ask'), input = $('word'), statusEl = $('status');
+  var calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ================= settings panel ================= */
+
+  var MODES = [['tunnel', '1  Tunnel'], ['drift', '2  Drift'], ['orbit', '3  Orbit'], ['spiral', '4  Spiral'],
+    ['rain', '5  Rain'], ['bounce', '6  Bounce'], ['wave', '7  Wave'], ['grid', '8  Wall'],
+    ['vortex', '9  Vortex'], ['strobe', '0  Strobe']];
+  var BLENDS = [['source-over', 'Normal'], ['screen', 'Screen'], ['lighter', 'Add'], ['overlay', 'Overlay'],
+    ['hard-light', 'Hard light'], ['difference', 'Difference'], ['exclusion', 'Exclusion'],
+    ['color-dodge', 'Colour dodge'], ['multiply', 'Multiply'], ['luminosity', 'Luminosity']];
+
+  // [key, label, type, ...]  range: min, max, step, value
+  var SECTIONS = [
+    ['Motion', [
+      ['mode', 'Animation', 'select', MODES],
+      ['auto', 'Change it', 'select', [['0', 'By hand'], ['8', 'Every 8 seconds'], ['16', 'Every 16 seconds'], ['32', 'Every 32 seconds']]],
+      ['speed', 'Speed', 'range', 0.1, 4, 0.05, 1],
+      ['count', 'How many', 'range', 4, 60, 1, 24],
+      ['size', 'Size', 'range', 0.3, 3, 0.05, 1],
+      ['big', 'Enlarged share', 'range', 0, 1, 0.05, 0.35]
+    ]],
+    ['Look', [
+      ['blend', 'Blend mode', 'select', BLENDS],
+      ['opacity', 'Image opacity', 'range', 0.1, 1, 0.05, 1],
+      ['soft', 'Soft edges', 'range', 0, 0.45, 0.01, 0.16],
+      ['bg', 'Background', 'color', '#020114'],
+      ['showText', 'Show the typed words', 'check', true],
+      ['orbitWords', 'Words orbit the images', 'check', true]
+    ]],
+    ['Feedback', [
+      ['fb', 'Trail', 'range', 0, 0.97, 0.01, 0],
+      ['fbZoom', 'Zoom', 'range', 0.96, 1.06, 0.002, 1.012],
+      ['fbRot', 'Twist', 'range', -3, 3, 0.05, 0]
+    ]],
+    ['Key out', [
+      ['key', 'Remove', 'select', [['off', 'Nothing'], ['color', 'A colour'], ['dark', 'Dark areas'], ['bright', 'Bright areas']]],
+      ['keyColor', 'Colour', 'color', '#00ff00'],
+      ['keyTol', 'Tolerance', 'range', 0.02, 0.8, 0.01, 0.3]
+    ]],
+    ['Sound', [
+      ['src', 'Source', 'select', [['off', 'Off'], ['ambient', 'Ambient music'], ['mic', 'Microphone'], ['file', 'Audio file']]],
+      ['file', 'File', 'file'],
+      ['volume', 'Volume', 'range', 0, 1, 0.01, 0.6],
+      ['beat', 'Add a slow beat', 'check', false],
+      ['reactSize', 'Sound → size', 'range', 0, 2, 0.05, 0.5],
+      ['reactSpeed', 'Sound → speed', 'range', 0, 3, 0.05, 0],
+      ['meter', 'Level', 'meter']
+    ]]
+  ];
+
+  var P = {}, E = {}, REPROCESS = { soft: 1, key: 1, keyColor: 1, keyTol: 1 };
+  var hooks = {};
+
+  SECTIONS.forEach(function (sec) {
+    var h = document.createElement('h2'); h.textContent = sec[0]; $('controls').appendChild(h);
+    sec[1].forEach(function (d) {
+      var key = d[0], type = d[2], row = document.createElement('label'), el;
+      row.className = 'row' + (type === 'check' ? ' check' : '');
+      var name = document.createElement('span'); name.textContent = d[1]; row.appendChild(name);
+      if (type === 'select') {
+        el = document.createElement('select');
+        d[3].forEach(function (o) { var op = document.createElement('option'); op.value = o[0]; op.textContent = o[1]; el.appendChild(op); });
+      } else if (type === 'meter') {
+        el = document.createElement('div'); el.id = 'meter'; el.appendChild(document.createElement('i'));
+      } else {
+        el = document.createElement('input');
+        el.type = type === 'check' ? 'checkbox' : type;
+        if (type === 'range') { el.min = d[3]; el.max = d[4]; el.step = d[5]; el.value = d[6]; }
+        if (type === 'color') el.value = d[3];
+        if (type === 'check') el.checked = d[3];
+        if (type === 'file') el.accept = 'audio/*';
+      }
+      row.appendChild(el); $('controls').appendChild(row);
+      E[key] = el; el.row = row;
+      if (type === 'meter' || type === 'file') return;
+      var read = function () {
+        P[key] = type === 'check' ? el.checked : type === 'range' ? parseFloat(el.value) : el.value;
+      };
+      read();
+      el.addEventListener(type === 'range' || type === 'color' ? 'input' : 'change', function () {
+        read();
+        if (REPROCESS[key]) scheduleReprocess();
+        if (hooks[key]) hooks[key]();
+      });
+    });
+  });
+  E.file.row.style.display = 'none';
+
+  function say(t) { statusEl.textContent = t; }
+
+  /* ================= image search ================= */
+
+  var pool = [], poolIndex = 0, currentWord = '', searchId = 0, warp = 1;
+
+  function fromCommons(q) {
+    var url = 'https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*' +
+      '&generator=search&gsrnamespace=6&gsrlimit=40' +
+      '&gsrsearch=' + encodeURIComponent('filetype:bitmap ' + q) +
+      '&prop=imageinfo&iiprop=url&iiurlwidth=500';
+    return fetch(url).then(function (r) { return r.json(); }).then(function (j) {
+      var pages = (j.query && j.query.pages) || {};
+      return Object.keys(pages).map(function (k) {
+        var p = pages[k], i = p.imageinfo && p.imageinfo[0];
+        if (!i || !i.thumburl) return null;
+        return { src: i.thumburl, alt: null,
+                 title: String(p.title || '').replace(/^File:/, '').replace(/\.\w+$/, '') };
+      }).filter(Boolean);
+    });
+  }
+
+  function fromOpenverse(q) {
+    var url = 'https://api.openverse.org/v1/images/?page_size=20&q=' + encodeURIComponent(q);
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error('openverse ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      return (j.results || []).map(function (x) {
+        if (!x.thumbnail && !x.url) return null;
+        return { src: x.thumbnail || x.url, alt: x.url, title: x.title || '' };
+      }).filter(Boolean);
+    });
+  }
+
+  function shuffle(a) {
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1)), t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  var COMMON = /^(the|and|for|with|from|that|this|are|was|were|you|your|has|have|had|not|but|its|his|her|she|him|they|them|their|our|who|what|when|where|why|how|all|any|can|will|would|could|should|into|over|under|about|than|then|there|here|just|like|very|some|more|most|been|being|does|did)$/i;
+  var SKIP = /^(the|and|for|with|from|jpg|jpeg|png|gif|img|dsc|file|image|photo|cropped)$/i;
+
+  function wordsFor(title) {
+    var out = [], seen = {};
+    String(title || '').split(/[^A-Za-z\u00C0-\u024F]+/).forEach(function (w) {
+      var k = w.toLowerCase();
+      if (w.length < 3 || SKIP.test(w) || seen[k]) return;
+      seen[k] = 1; out.push(k);
+    });
+    return out.slice(0, 3);
+  }
+
+  function clean(w) { return w.replace(/[^A-Za-z0-9\u00C0-\u024F'’-]/g, ''); }
+
+  function search(q) {
+    q = q.trim();
+    if (!q) return;
+    var id = ++searchId;
+    currentWord = q;
+    pool = []; poolIndex = 0;
+    if (!calm) warp = 6;
+    say('Looking for “' + q + '”…');
+    try { history.replaceState(null, '', '#' + encodeURIComponent(q)); } catch (e) {}
+
+    // A phrase is searched whole and also word by word, so a sentence still fills the screen.
+    var terms = [q], all = q.split(/\s+/);
+    if (all.length > 1) {
+      all.map(clean).filter(function (w) { return w.length >= 3 && !COMMON.test(w); })
+        .slice(0, 5).forEach(function (w) { if (terms.indexOf(w) < 0) terms.push(w); });
+    }
+    var jobs = [];
+    terms.forEach(function (t) { jobs.push(fromCommons(t)); jobs.push(fromOpenverse(t)); });
+
+    Promise.allSettled(jobs).then(function (res) {
+      if (id !== searchId) return;
+      var failed = res.every(function (r) { return r.status === 'rejected'; });
+      var items = [], seen = {};
+      res.forEach(function (r) {
+        if (r.status !== 'fulfilled') return;
+        r.value.forEach(function (it) { if (!seen[it.src]) { seen[it.src] = 1; items.push(it); } });
+      });
+      if (failed) { say('Can’t reach the image libraries. Check your connection and search again.'); return; }
+      if (!items.length) { say('No images tagged “' + q + '”. Try other words.'); return; }
+
+      var pending = items.length;
+      shuffle(items).forEach(function (it) {
+        var im = new Image();
+        im.crossOrigin = 'anonymous';   // needed so keying and feedback can read the pixels
+        im.onload = function () {
+          if (id !== searchId) return;
+          it.img = im; it.words = wordsFor(it.title);
+          process(it);
+          pool.push(it);
+          done();
+        };
+        im.onerror = function () {
+          if (it.alt && im.src !== it.alt) { im.src = it.alt; return; }
+          done();
+        };
+        im.src = it.src;
+      });
+      function done() {
+        if (id !== searchId) return;
+        pending--;
+        if (pool.length) say(pool.length + ' images for “' + q + '”.');
+        else if (!pending) say('The images for “' + q + '” wouldn’t load. Try other words.');
+      }
+    });
+  }
+
+  /* ================= per-image processing: key + soft edges ================= */
+
+  function process(it) {
+    var im = it.img, nw = im.naturalWidth, nh = im.naturalHeight;
+    if (!nw || !nh) return;
+    var w = Math.min(nw, 420), ar = Math.min(nh / nw, 1.3), h = Math.max(1, Math.round(w * ar));
+    var cv = it.cv || (it.cv = document.createElement('canvas'));
+    cv.width = w; cv.height = h;
+    var x = cv.getContext('2d', { willReadFrequently: true });
+    var sh = nw * ar;
+    x.drawImage(im, 0, (nh - sh) / 2, nw, sh, 0, 0, w, h);
+
+    if (P.key !== 'off') {
+      try {
+        var d = x.getImageData(0, 0, w, h), a = d.data, tol = P.keyTol;
+        var kr = parseInt(P.keyColor.slice(1, 3), 16), kg = parseInt(P.keyColor.slice(3, 5), 16), kb = parseInt(P.keyColor.slice(5, 7), 16);
+        for (var i = 0; i < a.length; i += 4) {
+          var r = a[i], g = a[i + 1], b = a[i + 2], k;
+          if (P.key === 'color') {
+            var dr = r - kr, dg = g - kg, db = b - kb;
+            k = (Math.sqrt(dr * dr + dg * dg + db * db) / 441.7 - tol) / 0.1;
+          } else {
+            var l = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+            k = ((P.key === 'dark' ? l : 1 - l) - tol) / 0.1;
+          }
+          if (k < 1) a[i + 3] = k <= 0 ? 0 : a[i + 3] * k;
+        }
+        x.putImageData(d, 0, 0);
+      } catch (e) { /* pixels not readable for this image: leave it unkeyed */ }
+    }
+
+    var f = P.soft;
+    if (f > 0) {
+      x.globalCompositeOperation = 'destination-in';
+      [[w, 0], [0, h]].forEach(function (dir) {
+        var gr = x.createLinearGradient(0, 0, dir[0], dir[1]);
+        gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(f, '#000');
+        gr.addColorStop(1 - f, '#000'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+        x.fillStyle = gr; x.fillRect(0, 0, w, h);
+      });
+    }
+  }
+
+  var reTimer = 0;
+  function scheduleReprocess() {
+    clearTimeout(reTimer);
+    reTimer = setTimeout(function () { pool.forEach(process); }, 150);
+  }
+
+  /* ================= sound ================= */
+
+  var AC = null, analyser, out, freq, level = 0, stopCurrent = null;
+
+  function ensureAudio() {
+    if (!AC) {
+      AC = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = AC.createAnalyser(); analyser.fftSize = 512; analyser.smoothingTimeConstant = 0.55;
+      freq = new Uint8Array(analyser.frequencyBinCount);
+      out = AC.createGain(); out.gain.value = P.volume;
+      out.connect(AC.destination); out.connect(analyser);
+    }
+    if (AC.state === 'suspended') AC.resume();
+  }
+
+  function startAmbient() {
+    var t = AC.currentTime, alive = true, oscs = [], timers = [];
+    var g = AC.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(1, t + 4); g.connect(out);
+    var delay = AC.createDelay(2); delay.delayTime.value = 0.46;
+    var fbk = AC.createGain(); fbk.gain.value = 0.55;
+    delay.connect(fbk); fbk.connect(delay); delay.connect(g);
+    var filter = AC.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 480; filter.Q.value = 1.2;
+    filter.connect(g); filter.connect(delay);
+
+    [55, 82.41, 110.4, 164.6].forEach(function (f, i) {
+      var o = AC.createOscillator(), og = AC.createGain();
+      o.type = i % 2 ? 'triangle' : 'sawtooth'; o.frequency.value = f; og.gain.value = 0.05;
+      o.connect(og); og.connect(filter); o.start(); oscs.push(o);
+    });
+    var lfo = AC.createOscillator(), lg = AC.createGain();
+    lfo.frequency.value = 0.05; lg.gain.value = 260; lfo.connect(lg); lg.connect(filter.frequency); lfo.start(); oscs.push(lfo);
+
+    var scale = [220, 261.63, 293.66, 329.63, 392, 440, 523.25, 587.33];
+    function note() {
+      if (!alive) return;
+      var now = AC.currentTime, o = AC.createOscillator(), ng = AC.createGain();
+      o.type = 'sine'; o.frequency.value = scale[Math.floor(Math.random() * scale.length)] * (Math.random() < 0.25 ? 2 : 1);
+      ng.gain.setValueAtTime(0.0001, now);
+      ng.gain.exponentialRampToValueAtTime(0.1, now + 0.03);
+      ng.gain.exponentialRampToValueAtTime(0.0001, now + 2.6);
+      o.connect(ng); ng.connect(g); ng.connect(delay);
+      o.start(now); o.stop(now + 2.7);
+      timers.push(setTimeout(note, 600 + Math.random() * 2600));
+    }
+    note();
+
+    timers.push(setInterval(function () {
+      if (!P.beat) return;
+      var now = AC.currentTime + 0.03, o = AC.createOscillator(), kg = AC.createGain();
+      o.frequency.setValueAtTime(95, now); o.frequency.exponentialRampToValueAtTime(38, now + 0.22);
+      kg.gain.setValueAtTime(0.7, now); kg.gain.exponentialRampToValueAtTime(0.0001, now + 0.36);
+      o.connect(kg); kg.connect(g); o.start(now); o.stop(now + 0.4);
+    }, 667));
+
+    return function () {
+      alive = false;
+      timers.forEach(function (id) { clearTimeout(id); clearInterval(id); });
+      var n = AC.currentTime;
+      g.gain.cancelScheduledValues(n); g.gain.setValueAtTime(g.gain.value, n); g.gain.linearRampToValueAtTime(0, n + 0.4);
+      setTimeout(function () { oscs.forEach(function (o) { try { o.stop(); } catch (e) {} }); g.disconnect(); }, 500);
+    };
+  }
+
+  function startMic() {
+    var stream = null, node = null, cancelled = false;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      say('This browser won’t give the page a microphone here. Try the audio file option.');
+      return function () {};
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+      if (cancelled) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
+      stream = s; node = AC.createMediaStreamSource(s); node.connect(analyser);   // not sent to the speakers
+    }).catch(function () {
+      say('Microphone access was refused. Allow it in the browser, or use the audio file option.');
+    });
+    return function () {
+      cancelled = true;
+      if (node) node.disconnect();
+      if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    };
+  }
+
+  function startFile(file) {
+    var el = new Audio(), url = URL.createObjectURL(file);
+    el.src = url; el.loop = true;
+    var node = AC.createMediaElementSource(el); node.connect(out);
+    el.play().catch(function () { say('That audio file wouldn’t play. Try an MP3 or WAV.'); });
+    return function () { el.pause(); node.disconnect(); URL.revokeObjectURL(url); };
+  }
+
+  function setSource() {
+    if (stopCurrent) { stopCurrent(); stopCurrent = null; }
+    E.file.row.style.display = P.src === 'file' ? '' : 'none';
+    if (P.src === 'off') return;
+    ensureAudio();
+    if (P.src === 'ambient') stopCurrent = startAmbient();
+    else if (P.src === 'mic') stopCurrent = startMic();
+    else if (P.src === 'file' && E.file.files[0]) stopCurrent = startFile(E.file.files[0]);
+  }
+  hooks.src = setSource;
+  hooks.volume = function () { if (out) out.gain.value = P.volume; };
+  E.file.addEventListener('change', setSource);
+
+  function listen() {
+    var bass = 0;
+    if (AC && P.src !== 'off') {
+      analyser.getByteFrequencyData(freq);
+      for (var i = 0; i < 7; i++) bass += freq[i];
+      bass /= 7 * 255;
+    }
+    level += (bass - level) * (bass > level ? 0.6 : 0.1);
+    E.meter.firstChild.style.width = Math.round(level * 100) + '%';
+  }
+
+  /* ================= sprites and the ten animations ================= */
+
+  var W = 0, H = 0, dpr = 1, vx = 0, vy = 0, tx = 0, ty = 0;
+  var T = 0, autoT = 0, running = true;
+  var sprites = [];
+  for (var i = 0; i < 60; i++) sprites.push(spawn({ item: null, word: '' }, Math.random()));
+
+  function spawn(s, p) {
+    s.p = p;
+    s.u = Math.random(); s.v = Math.random(); s.w = Math.random();
+    s.ph = Math.random() * 6.283;
+    s.dir = Math.random() < 0.5 ? 1 : -1;
+    s.vsp = 0.7 + Math.random() * 0.8;
+    s.rot = (Math.random() - 0.5) * 0.24;
+    s.spin = (Math.random() - 0.5) * 0.09;
+    s.size = Math.random() < P.big ? 1.6 + Math.random() * 0.9 : 1;
+    s.orb = Math.random() < 0.6;
+    if (pool.length) { s.item = pool[poolIndex++ % pool.length]; s.word = currentWord; }
+    else if (s.word !== currentWord) s.item = null;
+    return s;
+  }
+
+  function tri(a) { a = ((a % 2) + 2) % 2; return a < 1 ? a : 2 - a; }
+
+  var PERIOD = { tunnel: 9, drift: 16, orbit: 22, spiral: 10, rain: 8, bounce: 30, wave: 14, grid: 9, vortex: 10, strobe: 6 };
+  var o = { x: 0, y: 0, sc: 1, rot: 0, a: 1, fixed: false };
+
+  function pose(s, idx, n) {
+    var p = s.p, cx = W / 2, cy = H / 2, M = Math.min(W, H), X = Math.max(W, H);
+    var fade = Math.max(0, Math.min(1, p * 6, (1 - p) * 6));
+    var xx = s.dir > 0 ? p : 1 - p;
+    o.rot = s.rot + s.spin * T; o.a = fade; o.fixed = false;
+    switch (P.mode) {
+      case 'drift':
+        o.x = W * (-0.25 + 1.5 * xx); o.y = H * (0.1 + 0.8 * s.v) + Math.sin(T * 0.6 + s.ph) * 30; o.sc = 0.45 + 0.7 * s.w; break;
+      case 'orbit':
+        var ang = s.ph + p * 6.283 * s.dir, r = M * (0.18 + 0.34 * s.u);
+        o.x = cx + Math.cos(ang) * r * 1.6; o.y = cy + Math.sin(ang) * r * 0.75;
+        o.sc = (0.4 + 0.5 * s.w) * (1 + 0.35 * Math.sin(ang)); break;
+      case 'spiral':
+        var a2 = s.ph + p * 14, r2 = p * 0.62 * X;
+        o.x = cx + Math.cos(a2) * r2; o.y = cy + Math.sin(a2) * r2; o.sc = 0.15 + p * 1.3; break;
+      case 'rain':
+        o.x = W * s.u; o.y = H * (-0.3 + 1.6 * p); o.sc = 0.4 + 0.6 * s.w; break;
+      case 'bounce':
+        o.x = W * tri(s.u * 2 + T * 0.06 * (0.5 + s.w) * s.dir); o.y = H * tri(s.v * 2 + T * 0.05 * (0.5 + s.u));
+        o.sc = 0.45 + 0.5 * s.w; break;
+      case 'wave':
+        o.x = W * (-0.25 + 1.5 * xx);
+        o.y = cy + Math.sin(xx * 9 + T * 0.8) * H * 0.28 + (s.v - 0.5) * H * 0.2;
+        o.rot = Math.cos(xx * 9 + T * 0.8) * 0.3; o.sc = 0.5 + 0.3 * s.w; break;
+      case 'grid':
+        var cols = Math.ceil(Math.sqrt(n * W / H)), rows = Math.ceil(n / cols);
+        o.x = (idx % cols + 0.5) * W / cols; o.y = (Math.floor(idx / cols) + 0.5) * H / rows;
+        o.sc = W / cols / 260 * 0.95 * (1 + 0.06 * Math.sin(T * 2 + s.ph)); o.rot = 0; o.fixed = true; break;
+      case 'vortex':
+        var a3 = s.ph + p * p * 16, r3 = (1 - p) * 0.65 * X;
+        o.x = cx + Math.cos(a3) * r3; o.y = cy + Math.sin(a3) * r3; o.sc = 0.1 + (1 - p) * 1.1; break;
+      case 'strobe':
+        o.a = Math.floor(T * 3) % n === idx ? 1 : 0;
+        o.x = cx + (s.u - 0.5) * W * 0.3; o.y = cy + (s.v - 0.5) * H * 0.3;
+        o.sc = M / 260 * 0.8; o.rot = 0; o.fixed = true; break;
+      default: // tunnel
+        var z = 2400 - 2280 * p, k = 600 / z, rad = 260 + s.u * 1100;
+        o.x = vx + Math.cos(s.ph) * rad * 1.35 * k; o.y = vy + Math.sin(s.ph) * rad * 0.8 * k;
+        o.sc = k; o.a = Math.max(0, Math.min(1, p * 6, (1 - p) * 9));
+    }
+  }
+
+  function resize() {
+    W = innerWidth; H = innerHeight; dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    canvas.width = buf.width = Math.round(W * dpr); canvas.height = buf.height = Math.round(H * dpr);
+    vx = tx = W / 2; vy = ty = H / 2;
+  }
+  resize();
+  addEventListener('resize', resize);
+
+  var list = [];
+  var last = performance.now();
+  function frame(now) {
+    var dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    listen();
+    if (running) { step(dt); draw(); }
+    requestAnimationFrame(frame);
+  }
+
+  function step(dt) {
+    warp += (1 - warp) * Math.min(1, dt * 2.2);
+    vx += (tx - vx) * Math.min(1, dt * 3); vy += (ty - vy) * Math.min(1, dt * 3);
+    var speed = P.speed * warp * (1 + P.reactSpeed * level * 3) * (calm ? 0.4 : 1);
+    T += dt * speed;
+
+    var auto = parseFloat(P.auto);
+    if (auto) {
+      autoT += dt;
+      if (autoT >= auto) { autoT = 0; setMode((E.mode.selectedIndex + 1) % MODES.length); }
+    }
+
+    var n = P.count, per = PERIOD[P.mode] || 10;
+    for (var i = 0; i < n; i++) {
+      var s = sprites[i];
+      s.p += dt * speed * s.vsp / per;
+      if (s.p >= 1) spawn(s, 0);
+      else if (!s.item && pool.length) spawn(s, s.p);
+    }
+  }
+
+  function draw() {
+    var n = P.count;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = P.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    if (P.fb > 0) {            // feedback: the last frame, drawn back in slightly zoomed and twisted
+      ctx.save();
+      ctx.globalAlpha = P.fb;
+      ctx.translate(W / 2, H / 2);
+      ctx.rotate(P.fbRot * Math.PI / 180);
+      ctx.scale(P.fbZoom, P.fbZoom);
+      ctx.drawImage(buf, -W / 2, -H / 2, W, H);
+      ctx.restore();
+    }
+
+    list.length = 0;
+    var pulse = 1 + P.reactSize * level;
+    for (var i = 0; i < n; i++) {
+      var s = sprites[i];
+      if (!s.item || !s.item.cv) continue;
+      pose(s, i, n);
+      if (o.a <= 0.003) continue;
+      s.dx = o.x; s.dy = o.y; s.dr = o.rot; s.da = o.a;
+      s.ds = o.sc * (o.fixed ? 1 : s.size) * P.size * pulse;
+      list.push(s);
+    }
+    list.sort(function (a, b) { return a.ds - b.ds; });
+
+    for (var j = 0; j < list.length; j++) {
+      var q = list[j], cv = q.item.cv, w = 260 * q.ds, h = w * cv.height / cv.width;
+      ctx.globalCompositeOperation = P.blend;
+      ctx.globalAlpha = q.da * P.opacity;
+      ctx.save();
+      ctx.translate(q.dx, q.dy); ctx.rotate(q.dr);
+      ctx.drawImage(cv, -w / 2, -h / 2, w, h);
+      ctx.restore();
+
+      if (P.orbitWords && q.orb && q.item.words.length) {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = q.da * 0.6;
+        ctx.fillStyle = '#eceaff';
+        ctx.font = '400 ' + Math.max(10, Math.min(22, 13 * q.ds)).toFixed(1) + 'px "Bricolage Grotesque", Arial, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        for (var m = 0; m < q.item.words.length; m++) {
+          var an = T * 0.5 * q.dir + m * 2.1 + q.ph;
+          ctx.fillText(q.item.words[m], q.dx + Math.cos(an) * (w * 0.6 + m * 14), q.dy + Math.sin(an) * (h * 0.6 + m * 14));
+        }
+      }
+    }
+
+    bctx.globalCompositeOperation = 'copy';   // keep this frame (before the caption) for the next feedback pass
+    bctx.drawImage(canvas, 0, 0);
+
+    if (P.showText && currentWord) {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = '#eceaff';
+      ctx.font = '400 20px "Bricolage Grotesque", Arial, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(currentWord, W / 2, H / 2, W * 0.9);
+    }
+  }
+
+  /* ================= controls ================= */
+
+  function setMode(i) { E.mode.selectedIndex = i; P.mode = E.mode.value; }
+
+  function togglePause() {
+    running = !running;
+    $('pause').textContent = running ? 'Pause' : 'Play';
+  }
+  function toggleFull() {
+    var d = document, el = d.documentElement;
+    if (d.fullscreenElement || d.webkitFullscreenElement) (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+    else if (el.requestFullscreen) el.requestFullscreen().catch(function () {});
+    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    else say('This browser has no fullscreen for pages. Use its own fullscreen view instead.');
+  }
+  function togglePanel() { document.body.classList.toggle('clean'); wake(); }
+
+  $('pause').addEventListener('click', togglePause);
+  $('full').addEventListener('click', toggleFull);
+  $('hide').addEventListener('click', togglePanel);
+  $('open').addEventListener('click', togglePanel);
+  form.addEventListener('submit', function (e) { e.preventDefault(); search(input.value); });
+
+  var idleTimer = 0;
+  function wake() {
+    document.body.classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(function () { document.body.classList.add('idle'); }, 2500);
+  }
+  addEventListener('pointermove', function (e) {
+    tx = W / 2 + (e.clientX - W / 2) * 0.3; ty = H / 2 + (e.clientY - H / 2) * 0.3;
+    wake();
+  });
+  wake();
+
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (t === input || e.ctrlKey || e.metaKey || e.altKey) return;
+    var k = e.key.toLowerCase();
+    if (k >= '0' && k <= '9' && k.length === 1) { setMode(k === '0' ? 9 : +k - 1); autoT = 0; }
+    else if (k === ' ' && t.tagName !== 'BUTTON' && t.tagName !== 'SELECT') { e.preventDefault(); togglePause(); }
+    else if (k === 'f') toggleFull();
+    else if (k === 'h') togglePanel();
+  });
+
+  var start = '';
+  try { start = decodeURIComponent(location.hash.slice(1)); } catch (e) {}
+  if (start) { input.value = start.slice(0, 120); search(input.value); }
+  else input.focus();
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
