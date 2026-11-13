@@ -5,9 +5,8 @@ https://app.assembla.com/spaces/dominik-mahnic/wiki/Besede_Podobe_(2010)
 
 Run it
 
-Open wordspace.html in a current browser (Chrome, Edge, Firefox or Safari). It needs an internet connection to fetch images.
+Open Podobe_besede.html in a current browser (Chrome, Edge, Firefox or Safari). It needs an internet connection to fetch images.
 
-To host it on GitHub Pages, rename the file to index.html (or link to wordspace.html), then turn on Pages for the repository under Settings → Pages.
 
 A search can be put in the address, which is handy for bookmarks and links:
 
