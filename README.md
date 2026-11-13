@@ -1,6 +1,7 @@
 Type a word or a sentence, and images tagged with it fly across the screen. A browser-based VJ tool in a single HTML file: no install, no build step, no API key.
 
 It is a remake of an old Flash (SWF) piece that played on the link between words and the images the internet attaches to them.
+https://app.assembla.com/spaces/dominik-mahnic/wiki/Besede_Podobe_(2010)
 
 Run it
 
